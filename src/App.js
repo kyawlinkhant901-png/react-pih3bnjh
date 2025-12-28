@@ -1,195 +1,174 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
-import { ShoppingCart, RefreshCw, Trash2, CreditCard, LayoutDashboard, Store, Search, History, Tag, Printer, Filter, AlertTriangle } from 'lucide-react';
+import { ShoppingCart, Store, PlusCircle, Wallet, LayoutDashboard, Trash2, Printer, Search, Save } from 'lucide-react';
 
 export default function App() {
   const [view, setView] = useState('pos'); 
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
-  const [search, setSearch] = useState('');
-  const [selectedCat, setSelectedCat] = useState('All');
-  const [discount, setDiscount] = useState(0);
-  const [recentOrders, setRecentOrders] = useState([]);
-  const [salesSummary, setSalesSummary] = useState(0);
+  const [purchaseForm, setPurchaseForm] = useState({ productId: '', qty: '', cost: '' });
+  const [expenseForm, setExpenseForm] = useState({ desc: '', amount: '' });
+  const [dailySales, setDailySales] = useState(0);
+  const [dailyExpenses, setDailyExpenses] = useState(0);
 
   useEffect(() => {
-    fetchProducts();
-    fetchSalesToday();
-    fetchRecentOrders();
-    const channel = supabase.channel('realtime-pos').on('postgres_changes', 
-      { event: '*', schema: 'public', table: 'products' }, () => fetchProducts()).subscribe();
-    return () => supabase.removeChannel(channel);
+    fetchData();
   }, []);
 
-  async function fetchProducts() {
-    const { data } = await supabase.from('products').select('*').order('name');
-    setProducts(data || []);
-  }
-
-  async function fetchRecentOrders() {
-    const { data } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(20);
-    setRecentOrders(data || []);
-  }
-
-  async function fetchSalesToday() {
+  async function fetchData() {
     const today = new Date().toISOString().split('T')[0];
-    const { data } = await supabase.from('orders').select('total_amount').gte('created_at', today);
-    setSalesSummary(data?.reduce((sum, item) => sum + Number(item.total_amount), 0) || 0);
+    const { data: p } = await supabase.from('products').select('*').order('name');
+    const { data: s } = await supabase.from('orders').select('total_amount').gte('created_at', today);
+    const { data: e } = await supabase.from('expenses').select('amount').gte('created_at', today);
+    
+    setProducts(p || []);
+    setDailySales(s?.reduce((a, b) => a + Number(b.total_amount), 0) || 0);
+    setDailyExpenses(e?.reduce((a, b) => a + Number(b.amount), 0) || 0);
   }
 
-  const addToCart = (p) => {
-    if (p.stock_quantity <= 0) return alert("ပစ္စည်းပြတ်နေပါသည်");
-    setCart([...cart, { ...p, cartId: Math.random() }]);
+  // --- အဝယ်ဘောင်ချာ သွင်းခြင်း ---
+  const handlePurchaseSubmit = async (e) => {
+    e.preventDefault();
+    if (!purchaseForm.productId || !purchaseForm.qty) return alert("အချက်အလက်ပြည့်စုံပါစေ");
+
+    const { error: pError } = await supabase.from('purchases').insert([{
+      item_name: products.find(p => p.id === purchaseForm.productId)?.name,
+      amount: Number(purchaseForm.cost)
+    }]);
+
+    if (!pError) {
+      await supabase.rpc('handle_purchase', { 
+        p_id: purchaseForm.productId, 
+        quantity_to_add: parseInt(purchaseForm.qty) 
+      });
+      alert("အဝယ်ဘောင်ချာသိမ်းပြီး၊ စတော့တိုးလိုက်ပါပြီ။");
+      setPurchaseForm({ productId: '', qty: '', cost: '' });
+      fetchData();
+    }
   };
 
-  const finalTotal = cart.reduce((acc, curr) => acc + curr.price, 0) - discount;
-
+  // --- အရောင်း (Checkout) ---
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    const itemsList = cart.map(i => i.name).join(', '); // ရောင်းလိုက်တဲ့ ပစ္စည်းစာရင်း မှတ်ရန်
-    
-    const { error } = await supabase.from('orders').insert([{ total_amount: finalTotal, device_name: itemsList }]);
+    const total = cart.reduce((a, b) => a + b.price, 0);
+    const { error } = await supabase.from('orders').insert([{ 
+      total_amount: total, 
+      device_name: cart.map(i => i.name).join(', ') 
+    }]);
     
     if (!error) {
       for (const item of cart) {
         await supabase.rpc('handle_checkout', { p_id: item.id, quantity_to_subtract: 1 });
       }
-      alert("ရောင်းချမှု အောင်မြင်ပါသည်။");
-      setCart([]); setDiscount(0); fetchSalesToday(); fetchRecentOrders();
+      if (window.confirm("ရောင်းချမှုအောင်မြင်သည်။ Print ထုတ်မလား?")) window.print();
+      setCart([]); fetchData();
     }
   };
 
-  const categories = ['All', ...new Set(products.map(p => p.category))];
-  const filteredProducts = products.filter(p => 
-    (selectedCat === 'All' || p.category === selectedCat) &&
-    p.name.toLowerCase().includes(search.toLowerCase())
-  );
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: 'sans-serif', backgroundColor: '#f1f5f9' }}>
-      {/* Top Bar */}
-      <div style={{ background: '#0f172a', color: 'white', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.2)' }}>
-        <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>🚀 SmartPOS Ultra</h2>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={() => setView('pos')} style={view === 'pos' ? activeNavStyle : navBtnStyle}><Store size={18}/> အရောင်း</button>
-          <button onClick={() => setView('history')} style={view === 'history' ? activeNavStyle : navBtnStyle}><History size={18}/> စာရင်း</button>
-          <button onClick={() => setView('dashboard')} style={view === 'dashboard' ? activeNavStyle : navBtnStyle}><LayoutDashboard size={18}/> Dashboard</button>
+    <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif', background: '#f0f2f5' }}>
+      {/* Sidebar - No Print Area */}
+      <div className="no-print" style={{ width: '260px', background: '#1c1e21', color: '#fff', padding: '20px' }}>
+        <h2 style={{ color: '#4e73df', marginBottom: '30px' }}>Smart Business</h2>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <button onClick={() => setView('pos')} style={sidebarBtn(view === 'pos')}><Store size={18}/> အရောင်း (POS)</button>
+          <button onClick={() => setView('purchase')} style={sidebarBtn(view === 'purchase')}><PlusCircle size={18}/> အဝယ်ဘောင်ချာ</button>
+          <button onClick={() => setView('expense')} style={sidebarBtn(view === 'expense')}><Wallet size={18}/> အိမ်သုံး/အထွေထွေ</button>
+          <button onClick={() => setView('dashboard')} style={sidebarBtn(view === 'dashboard')}><LayoutDashboard size={18}/> Dashboard</button>
         </div>
       </div>
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {view === 'pos' ? (
-          <>
-            {/* Left Side: Categories & Products */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '15px' }}>
-              <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', overflowX: 'auto', paddingBottom: '5px' }}>
-                {categories.map(cat => (
-                  <button key={cat} onClick={() => setSelectedCat(cat)} style={cat === selectedCat ? activeCatStyle : catStyle}>{cat}</button>
-                ))}
-              </div>
-              <div style={{ position: 'relative', marginBottom: '15px' }}>
-                <Search style={{ position: 'absolute', left: '12px', top: '10px', color: '#94a3b8' }} size={18}/>
-                <input type="text" placeholder="ပစ္စည်းရှာရန်..." style={searchInputStyle} onChange={(e) => setSearch(e.target.value)} />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '12px', overflowY: 'auto' }}>
-                {filteredProducts.map(p => (
-                  <div key={p.id} onClick={() => addToCart(p)} style={productCardStyle(p.stock_quantity)}>
-                    <div style={{fontSize: '30px', marginBottom: '5px'}}>📦</div>
-                    <div style={{fontWeight: 'bold', fontSize: '14px', height: '35px', overflow: 'hidden'}}>{p.name}</div>
-                    <div style={{color: '#2563eb', fontWeight: 'bold'}}>{p.price.toLocaleString()} K</div>
-                    <div style={{fontSize: '11px', color: p.stock_quantity < 5 ? '#ef4444' : '#64748b'}}>Stock: {p.stock_quantity}</div>
+      {/* Main Content Area */}
+      <div className="no-print" style={{ flex: 1, padding: '25px', overflowY: 'auto' }}>
+        {view === 'pos' && (
+          <div style={{ display: 'flex', gap: '20px' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '15px' }}>
+                {products.map(p => (
+                  <div key={p.id} onClick={() => setCart([...cart, {...p, cid: Math.random()}])} style={itemCard}>
+                    <div style={{fontSize:'30px'}}>📦</div>
+                    <b>{p.name}</b><br/>
+                    <span style={{color:'#4e73df'}}>{p.price.toLocaleString()} K</span><br/>
+                    <small>ကျန်: {p.stock_quantity}</small>
                   </div>
                 ))}
               </div>
             </div>
-
-            {/* Right Side: Cart */}
-            <div style={cartContainerStyle}>
-              <h3 style={{marginTop: 0, display: 'flex', alignItems: 'center', gap: '10px'}}><ShoppingCart/> လက်ရှိပြေစာ</h3>
-              <div style={{ flex: 1, overflowY: 'auto' }}>
-                {cart.map((item, idx) => (
-                  <div key={idx} style={cartItemStyle}>
-                    <div style={{fontWeight: 'bold'}}>{item.name}</div>
-                    <div style={{display: 'flex', justifyContent: 'space-between', color: '#64748b'}}>
-                      <span>1 x {item.price.toLocaleString()}</span>
-                      <Trash2 size={16} color="#ef4444" style={{cursor:'pointer'}} onClick={() => setCart(cart.filter((_, i) => i !== idx))}/>
-                    </div>
-                  </div>
-                ))}
+            <div style={cartPanel}>
+              <h3>လက်ရှိဘောင်ချာ</h3>
+              <div style={{flex: 1, overflowY: 'auto'}}>
+                {cart.map((c, i) => <div key={i} style={cartItem}>{c.name} <span>{c.price} K</span></div>)}
               </div>
-              <div style={{ borderTop: '2px solid #e2e8f0', paddingTop: '15px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', fontSize: '14px' }}>
-                  <span>စုစုပေါင်း:</span>
-                  <span>{(finalTotal + discount).toLocaleString()} MMK</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                  <span style={{color: '#16a34a'}}><Tag size={14}/> Discount:</span>
-                  <input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} style={discountInputStyle} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '20px', fontWeight: 'bold', color: '#0f172a', marginBottom: '15px' }}>
-                  <span>Total:</span>
-                  <span>{finalTotal.toLocaleString()} MMK</span>
-                </div>
-                <button onClick={handleCheckout} style={checkoutBtnStyle}>Pay Now & Print</button>
-              </div>
-            </div>
-          </>
-        ) : view === 'history' ? (
-          <div style={{ flex: 1, padding: '25px', overflowY: 'auto' }}>
-            <h2 style={{display: 'flex', alignItems: 'center', gap: '10px'}}><History/> အရောင်းမှတ်တမ်းများ</h2>
-            <div style={{ display: 'grid', gap: '10px' }}>
-              {recentOrders.map(order => (
-                <div key={order.id} style={orderHistoryCard}>
-                  <div>
-                    <div style={{fontWeight: 'bold', fontSize: '16px'}}>#{order.id.slice(0,8)}</div>
-                    <div style={{fontSize: '12px', color: '#64748b'}}>{new Date(order.created_at).toLocaleString()}</div>
-                    <div style={{fontSize: '13px', marginTop: '5px', color: '#1e293b'}}>Items: {order.device_name || 'N/A'}</div>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: 'bold', color: '#16a34a', fontSize: '18px' }}>{order.total_amount.toLocaleString()} K</div>
-                    <button style={printMiniBtn} onClick={() => window.print()}><Printer size={14}/> Re-print</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
-            <h1>📊 လုပ်ငန်းအနှစ်ချုပ် Dashboard</h1>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
-              <div style={statCard('#16a34a')}>
-                <h3 style={{margin:0}}>ယနေ့စုစုပေါင်းရောင်းရငွေ</h3>
-                <div style={{fontSize: '45px', fontWeight: 'bold', marginTop: '10px'}}>{salesSummary.toLocaleString()} MMK</div>
-              </div>
-              <div style={statCard('#ef4444')}>
-                <h3 style={{margin:0, display: 'flex', alignItems: 'center', gap: '10px'}}><AlertTriangle/> စတော့ကုန်ခါနီး (Critical)</h3>
-                <div style={{marginTop: '10px'}}>
-                  {products.filter(p => p.stock_quantity < 5).map(p => (
-                    <div key={p.id} style={{background: 'rgba(255,255,255,0.2)', padding: '5px 10px', borderRadius: '5px', marginBottom: '5px'}}>
-                      {p.name} - (ကျန်: {p.stock_quantity})
-                    </div>
-                  ))}
-                </div>
+              <div style={{borderTop: '1px solid #ddd', paddingTop: '10px'}}>
+                <h4>စုစုပေါင်း: {cart.reduce((a,b)=>a+b.price,0).toLocaleString()} K</h4>
+                <button onClick={handleCheckout} style={btnPrimary}>Check Out</button>
               </div>
             </div>
           </div>
         )}
+
+        {view === 'purchase' && (
+          <div style={formBox}>
+            <h3>🛒 အဝယ်ဘောင်ချာအသစ်သွင်းရန်</h3>
+            <form onSubmit={handlePurchaseSubmit}>
+              <label>ပစ္စည်းရွေးပါ</label>
+              <select style={inputStyle} value={purchaseForm.productId} onChange={e => setPurchaseForm({...purchaseForm, productId: e.target.value})}>
+                <option value="">-- ရွေးရန် --</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <label>ဝယ်ယူသည့် အရေအတွက်</label>
+              <input type="number" style={inputStyle} value={purchaseForm.qty} onChange={e => setPurchaseForm({...purchaseForm, qty: e.target.value})} />
+              <label>ဝယ်စျေးစုစုပေါင်း (Optional)</label>
+              <input type="number" style={inputStyle} value={purchaseForm.cost} onChange={e => setPurchaseForm({...purchaseForm, cost: e.target.value})} />
+              <button type="submit" style={btnPrimary}><Save size={18}/> စာရင်းသွင်းမည်</button>
+            </form>
+          </div>
+        )}
+
+        {view === 'expense' && (
+          <div style={formBox}>
+            <h3>🏠 အိမ်သုံး/အထွေထွေ အသုံးစရိတ်</h3>
+            <input placeholder="အကြောင်းအရာ" style={inputStyle} value={expenseForm.desc} onChange={e => setExpenseForm({...expenseForm, desc: e.target.value})} />
+            <input type="number" placeholder="ကုန်ကျငွေ" style={inputStyle} value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} />
+            <button onClick={async () => {
+              await supabase.from('expenses').insert([{ description: expenseForm.desc, amount: Number(expenseForm.amount) }]);
+              alert("စာရင်းသွင်းပြီးပါပြီ"); setExpenseForm({desc:'', amount:''}); fetchData();
+            }} style={btnPrimary}>သိမ်းဆည်းမည်</button>
+          </div>
+        )}
+
+        {view === 'dashboard' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
+            <div style={{...dashCard, background: '#4e73df'}}><h4>ယနေ့အရောင်း</h4><h2>{dailySales.toLocaleString()} K</h2></div>
+            <div style={{...dashCard, background: '#e74a3b'}}><h4>ယနေ့အသုံးစရိတ်</h4><h2>{dailyExpenses.toLocaleString()} K</h2></div>
+            <div style={{...dashCard, background: '#1cc88a'}}><h4>အသားတင်အမြတ်</h4><h2>{(dailySales - dailyExpenses).toLocaleString()} K</h2></div>
+          </div>
+        )}
+      </div>
+
+      {/* Print Section */}
+      <style>{`
+        @media print { .no-print { display: none !important; } .print-only { display: block !important; } }
+        .print-only { display: none; font-family: monospace; width: 300px; padding: 20px; }
+      `}</style>
+      <div className="print-only">
+        <center><h3>MY SHOP POS</h3><p>{new Date().toLocaleString()}</p></center>
+        <hr/>
+        {cart.map((c, i) => <div key={i}>{c.name} .... {c.price} K</div>)}
+        <hr/>
+        <h4>TOTAL: {cart.reduce((a,b)=>a+b.price,0)} K</h4>
+        <center><p>ကျေးဇူးတင်ပါသည်</p></center>
       </div>
     </div>
   );
 }
 
-// Styles
-const navBtnStyle = { background: 'transparent', border: 'none', color: '#94a3b8', padding: '8px 15px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' };
-const activeNavStyle = { ...navBtnStyle, background: '#1e293b', color: 'white' };
-const catStyle = { padding: '8px 20px', borderRadius: '20px', border: '1px solid #cbd5e1', background: 'white', cursor: 'pointer', whiteSpace: 'nowrap' };
-const activeCatStyle = { ...catStyle, background: '#2563eb', color: 'white', border: 'none' };
-const searchInputStyle = { width: '100%', padding: '10px 40px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '15px' };
-const productCardStyle = (stock) => ({ background: 'white', padding: '15px', borderRadius: '12px', textAlign: 'center', cursor: stock > 0 ? 'pointer' : 'not-allowed', opacity: stock > 0 ? 1 : 0.6, boxShadow: '0 2px 4px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0' });
-const cartContainerStyle = { width: '380px', background: 'white', padding: '20px', display: 'flex', flexDirection: 'column', borderLeft: '1px solid #e2e8f0' };
-const cartItemStyle = { padding: '10px', background: '#f8fafc', borderRadius: '8px', marginBottom: '8px' };
-const discountInputStyle = { width: '90px', padding: '5px', textAlign: 'right', borderRadius: '5px', border: '1px solid #cbd5e1' };
-const checkoutBtnStyle = { width: '100%', padding: '15px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '12px', fontSize: '18px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 6px rgba(37, 99, 235, 0.2)' };
-const orderHistoryCard = { background: 'white', padding: '15px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #e2e8f0' };
-const printMiniBtn = { marginTop: '5px', background: 'none', border: '1px solid #cbd5e1', padding: '3px 8px', borderRadius: '5px', cursor: 'pointer', fontSize: '12px' };
-const statCard = (color) => ({ background: color, color: 'white', padding: '25px', borderRadius: '20px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' });
+// CSS Styles
+const sidebarBtn = (active) => ({ width: '100%', padding: '12px', textAlign: 'left', background: active ? '#4e73df' : 'none', border: 'none', color: '#fff', cursor: 'pointer', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '5px' });
+const itemCard = { background: '#fff', padding: '15px', borderRadius: '12px', textAlign: 'center', cursor: 'pointer', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' };
+const cartPanel = { width: '320px', background: '#fff', padding: '20px', borderRadius: '15px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' };
+const cartItem = { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #eee' };
+const inputStyle = { width: '100%', padding: '10px', marginBottom: '15px', borderRadius: '8px', border: '1px solid #ddd' };
+const btnPrimary = { width: '100%', padding: '12px', background: '#4e73df', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' };
+const formBox = { maxWidth: '450px', background: '#fff', padding: '30px', borderRadius: '15px', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' };
+const dashCard = { padding: '30px', borderRadius: '15px', color: '#fff', textAlign: 'center' };
