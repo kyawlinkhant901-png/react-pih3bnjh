@@ -1,170 +1,165 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
-import { ShoppingCart, Store, PlusCircle, Wallet, LayoutDashboard, Wifi, WifiOff, CloudUpload, Trash2, Printer, Save } from 'lucide-react';
+import { ShoppingCart, Store, PlusCircle, Wallet, LayoutDashboard, Search, Trash2, Edit3, Calendar, DollarSign, Package } from 'lucide-react';
 
 export default function App() {
   const [view, setView] = useState('pos');
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [offlineOrders, setOfflineOrders] = useState(JSON.parse(localStorage.getItem('offline_orders')) || []);
-  const [purchaseForm, setPurchaseForm] = useState({ productId: '', qty: '', cost: '' });
-  const [expenseForm, setExpenseForm] = useState({ desc: '', amount: '' });
-  const [dailySales, setDailySales] = useState(0);
-  const [dailyExpenses, setDailyExpenses] = useState(0);
+  const [search, setSearch] = useState('');
+  const [orders, setOrders] = useState([]);
+  const [monthlyData, setMonthlyData] = useState({ revenue: 0, profit: 0 });
 
   useEffect(() => {
     fetchData();
-    window.addEventListener('online', () => setIsOnline(true));
-    window.addEventListener('offline', () => setIsOnline(false));
-  }, [isOnline]);
+  }, []);
 
   async function fetchData() {
-    const today = new Date().toISOString().split('T')[0];
-    if (isOnline) {
-      const { data: p } = await supabase.from('products').select('*').order('name');
-      const { data: s } = await supabase.from('orders').select('total_amount').gte('created_at', today);
-      const { data: e } = await supabase.from('expenses').select('amount').gte('created_at', today);
-      
-      setProducts(p || []);
-      setDailySales(s?.reduce((a, b) => a + Number(b.total_amount), 0) || 0);
-      setDailyExpenses(e?.reduce((a, b) => a + Number(b.amount), 0) || 0);
-      localStorage.setItem('products_cache', JSON.stringify(p));
-    } else {
-      setProducts(JSON.parse(localStorage.getItem('products_cache')) || []);
-    }
+    const { data: p } = await supabase.from('products').select('*').order('name');
+    const { data: o } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+    setProducts(p || []);
+    setOrders(o || []);
+    calculateMonthly(o || []);
   }
 
-  const handleCheckout = async () => {
-    if (cart.length === 0) return;
-    const total = cart.reduce((a, b) => a + b.price, 0);
-    const orderData = { total_amount: total, device_name: cart.map(i => i.name).join(', '), created_at: new Date() };
-
-    if (isOnline) {
-      const { error } = await supabase.from('orders').insert([orderData]);
-      if (!error) {
-        for (const item of cart) {
-          await supabase.rpc('handle_checkout', { p_id: item.id, quantity_to_subtract: 1 });
-        }
-        if (window.confirm("အရောင်းအောင်မြင်သည်။ Print ထုတ်မလား?")) window.print();
-      }
-    } else {
-      const newOffline = [...offlineOrders, orderData];
-      setOfflineOrders(newOffline);
-      localStorage.setItem('offline_orders', JSON.stringify(newOffline));
-      alert("Offline အနေဖြင့် သိမ်းဆည်းလိုက်ပါပြီ။");
-    }
-    setCart([]); fetchData();
+  // လချုပ်တွက်ချက်ခြင်း
+  const calculateMonthly = (allOrders) => {
+    const now = new Date();
+    const currentMonth = allOrders.filter(o => new Date(o.created_at).getMonth() === now.getMonth());
+    const rev = currentMonth.reduce((a, b) => a + Number(b.total_amount), 0);
+    // အမြတ်ကို အကြမ်းဖျင်းတွက်ချက်ခြင်း (Sales - Cost)
+    setMonthlyData({ revenue: rev, profit: rev * 0.2 }); // ဥပမာ - ၂၀% အမြတ်
   };
 
-  const handlePurchase = async (e) => {
-    e.preventDefault();
-    if (!isOnline) return alert("အဝယ်စာရင်းသွင်းရန် အင်တာနက်လိုအပ်ပါသည်။");
-    const { error } = await supabase.from('purchases').insert([{
-      item_name: products.find(p => p.id === purchaseForm.productId)?.name,
-      amount: Number(purchaseForm.cost)
-    }]);
-    if (!error) {
-      await supabase.rpc('handle_purchase', { p_id: purchaseForm.productId, quantity_to_add: parseInt(purchaseForm.qty) });
-      alert("အဝယ်စာရင်းသွင်းပြီးပါပြီ။");
-      setPurchaseForm({ productId: '', qty: '', cost: '' });
+  // အရောင်းစာရင်း ဖျက်ခြင်း
+  const deleteOrder = async (id) => {
+    if (window.confirm("ဒီအရောင်းစာရင်းကို ဖျက်မှာ သေချာပါသလား?")) {
+      await supabase.from('orders').delete().eq('id', id);
       fetchData();
     }
   };
 
+  const handleCheckout = async () => {
+    if (cart.length === 0) return;
+    const total = cart.reduce((a, b) => a + b.price, 0);
+    const { error } = await supabase.from('orders').insert([{ 
+      total_amount: total, 
+      device_name: cart.map(i => i.name).join(', '),
+      items_json: cart 
+    }]);
+    if (!error) {
+      for (const item of cart) {
+        await supabase.rpc('handle_checkout', { p_id: item.id, quantity_to_subtract: 1 });
+      }
+      alert("ရောင်းချမှု အောင်မြင်သည်။");
+      setCart([]); fetchData();
+    }
+  };
+
+  const filteredProducts = products.filter(p => 
+    p.name.toLowerCase().includes(search.toLowerCase()) || 
+    (p.product_code && p.product_code.toLowerCase().includes(search.toLowerCase()))
+  );
+
   return (
-    <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif', background: '#f4f7f6' }}>
+    <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif', background: '#f8fafc' }}>
       {/* Sidebar */}
-      <div className="no-print" style={{ width: '260px', background: '#1c1e21', color: '#fff', padding: '20px' }}>
-        <h2 style={{color: '#4e73df'}}>My POS Pro</h2>
-        <div style={{ marginBottom: '20px', color: isOnline ? '#4ade80' : '#f87171', display: 'flex', alignItems: 'center', gap: '5px' }}>
-          {isOnline ? <Wifi size={14}/> : <WifiOff size={14}/>} {isOnline ? 'Online' : 'Offline'}
-        </div>
-        
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <button onClick={() => setView('pos')} style={navBtn(view==='pos')}><Store size={18}/> အရောင်း (POS)</button>
-          <button onClick={() => setView('purchase')} style={navBtn(view==='purchase')}><PlusCircle size={18}/> အဝယ်ဘောင်ချာ</button>
-          <button onClick={() => setView('expense')} style={navBtn(view==='expense')}><Wallet size={18}/> အိမ်သုံးစရိတ်</button>
-          <button onClick={() => setView('dashboard')} style={navBtn(view==='dashboard')}><LayoutDashboard size={18}/> Dashboard</button>
+      <div style={{ width: '260px', background: '#0f172a', color: '#fff', padding: '20px' }}>
+        <h2 style={{ color: '#38bdf8' }}>Pro POS Manager</h2>
+        <nav style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '30px' }}>
+          <button onClick={() => setView('pos')} style={sidebarBtn(view==='pos')}><Store size={18}/> အရောင်း (POS)</button>
+          <button onClick={() => setView('inventory')} style={sidebarBtn(view==='inventory')}><Package size={18}/> ပစ္စည်းစာရင်း/Code</button>
+          <button onClick={() => setView('history')} style={sidebarBtn(view==='history')}><Calendar size={18}/> အရောင်းစာရင်း (Edit)</button>
+          <button onClick={() => setView('report')} style={sidebarBtn(view==='report')}><LayoutDashboard size={18}/> လချုပ် Report</button>
         </nav>
       </div>
 
       {/* Main Content */}
-      <div className="no-print" style={{ flex: 1, padding: '25px', overflowY: 'auto' }}>
+      <div style={{ flex: 1, padding: '25px', overflowY: 'auto' }}>
+        
         {view === 'pos' && (
           <div style={{ display: 'flex', gap: '20px' }}>
             <div style={{ flex: 1 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '15px' }}>
-                {products.map(p => (
-                  <div key={p.id} onClick={() => setCart([...cart, p])} style={cardStyle}>
-                    <b>{p.name}</b><br/><span>{p.price} K</span><br/><small>Stock: {p.stock_quantity}</small>
+              <div style={{ position: 'relative', marginBottom: '20px' }}>
+                <Search style={{ position: 'absolute', left: '10px', top: '10px', color: '#94a3b8' }} size={20}/>
+                <input 
+                  placeholder="ပစ္စည်းနာမည် သို့မဟုတ် Code ဖြင့်ရှာပါ..." 
+                  style={searchInput} 
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '15px' }}>
+                {filteredProducts.map(p => (
+                  <div key={p.id} onClick={() => setCart([...cart, p])} style={productCard}>
+                    <small style={{color: '#64748b'}}>#{p.product_code || 'No Code'}</small>
+                    <div style={{fontWeight: 'bold', margin: '5px 0'}}>{p.name}</div>
+                    <div style={{color: '#2563eb'}}>{p.price.toLocaleString()} K</div>
                   </div>
                 ))}
               </div>
             </div>
-            <div style={cartPanel}>
+            <div style={cartContainer}>
               <h3>လက်ရှိဘောင်ချာ</h3>
-              <div style={{flex: 1}}>{cart.map((c, i) => <div key={i}>{c.name} - {c.price}</div>)}</div>
-              <hr/>
-              <h4>Total: {cart.reduce((a,b)=>a+b.price,0)} K</h4>
-              <button onClick={handleCheckout} style={btnPrimary}>Pay Now</button>
+              <div style={{flex: 1}}>{cart.map((c, i) => <div key={i} style={cartItem}>{c.name} <span>{c.price} K</span></div>)}</div>
+              <div style={{borderTop: '2px solid #f1f5f9', paddingTop: '15px'}}>
+                <h3>Total: {cart.reduce((a,b)=>a+b.price,0).toLocaleString()} K</h3>
+                <button onClick={handleCheckout} style={checkoutBtn}>Checkout</button>
+              </div>
             </div>
           </div>
         )}
 
-        {view === 'purchase' && (
-          <div style={formBox}>
-            <h3>🛒 အဝယ်ဘောင်ချာသွင်းရန်</h3>
-            <form onSubmit={handlePurchase}>
-              <select style={inputStyle} value={purchaseForm.productId} onChange={e => setPurchaseForm({...purchaseForm, productId: e.target.value})}>
-                <option value="">-- ပစ္စည်းရွေးပါ --</option>
-                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <input placeholder="အရေအတွက်" type="number" style={inputStyle} value={purchaseForm.qty} onChange={e => setPurchaseForm({...purchaseForm, qty: e.target.value})} />
-              <input placeholder="ဝယ်စျေးစုစုပေါင်း" type="number" style={inputStyle} value={purchaseForm.cost} onChange={e => setPurchaseForm({...purchaseForm, cost: e.target.value})} />
-              <button type="submit" style={btnPrimary}>စာရင်းသွင်းမည်</button>
-            </form>
+        {view === 'history' && (
+          <div style={tableCard}>
+            <h3>အရောင်းမှတ်တမ်း (Edit/Delete)</h3>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '2px solid #eee' }}>
+                  <th>နေ့စွဲ</th><th>ပစ္စည်းများ</th><th>စုစုပေါင်း</th><th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map(o => (
+                  <tr key={o.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{padding: '12px'}}>{new Date(o.created_at).toLocaleDateString()}</td>
+                    <td>{o.device_name}</td>
+                    <td>{o.total_amount} K</td>
+                    <td>
+                      <button onClick={() => deleteOrder(o.id)} style={{color: '#ef4444', border: 'none', background: 'none', cursor: 'pointer'}}><Trash2 size={18}/></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
-        {view === 'expense' && (
-          <div style={formBox}>
-            <h3>🏠 အိမ်သုံးစရိတ် မှတ်ရန်</h3>
-            <input placeholder="အကြောင်းအရာ" style={inputStyle} value={expenseForm.desc} onChange={e => setExpenseForm({...expenseForm, desc: e.target.value})} />
-            <input placeholder="ပမာဏ" type="number" style={inputStyle} value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} />
-            <button onClick={async () => {
-              if (isOnline) {
-                await supabase.from('expenses').insert([{ description: expenseForm.desc, amount: Number(expenseForm.amount) }]);
-                alert("သိမ်းဆည်းပြီးပါပြီ"); setExpenseForm({desc:'', amount:''}); fetchData();
-              }
-            }} style={btnPrimary}>သိမ်းမည်</button>
+        {view === 'report' && (
+          <div>
+            <h1>📊 လချုပ်အစီရင်ခံစာ ({new Date().toLocaleString('default', { month: 'long' })})</h1>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div style={{...statCard, background: '#2563eb'}}>
+                <h4>စုစုပေါင်းရောင်းရငွေ</h4>
+                <h2>{monthlyData.revenue.toLocaleString()} MMK</h2>
+              </div>
+              <div style={{...statCard, background: '#10b981'}}>
+                <h4>ခန့်မှန်းခြေ အမြတ်</h4>
+                <h2>{monthlyData.profit.toLocaleString()} MMK</h2>
+              </div>
+            </div>
           </div>
         )}
-
-        {view === 'dashboard' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
-            <div style={{...dashCard, background: '#4e73df'}}><h4>ယနေ့အရောင်း</h4><h2>{dailySales} K</h2></div>
-            <div style={{...dashCard, background: '#e74a3b'}}><h4>ယနေ့အသုံးစရိတ်</h4><h2>{dailyExpenses} K</h2></div>
-            <div style={{...dashCard, background: '#1cc88a'}}><h4>အသားတင်အမြတ်</h4><h2>{dailySales - dailyExpenses} K</h2></div>
-          </div>
-        )}
-      </div>
-
-      {/* Print Only Area */}
-      <style>{`@media print {.no-print {display:none;} .print-only {display:block !important;}} .print-only {display:none; font-family:monospace; padding:20px;}`}</style>
-      <div className="print-only">
-        <center><h2>INVOICE</h2><hr/>
-        {cart.map((c, i) => <div key={i}>{c.name} ... {c.price} K</div>)}
-        <hr/><h3>Total: {cart.reduce((a,b)=>a+b.price,0)} K</h3></center>
       </div>
     </div>
   );
 }
 
-const navBtn = (sel) => ({ width: '100%', padding: '12px', textAlign: 'left', background: sel ? '#4e73df' : 'none', border: 'none', color: '#fff', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' });
-const cardStyle = { background: '#fff', padding: '15px', borderRadius: '10px', textAlign: 'center', cursor: 'pointer', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' };
-const cartPanel = { width: '300px', background: '#fff', padding: '20px', borderRadius: '12px', display: 'flex', flexDirection: 'column' };
-const inputStyle = { width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '5px', border: '1px solid #ddd' };
-const btnPrimary = { width: '100%', padding: '12px', background: '#4e73df', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' };
-const formBox = { maxWidth: '400px', background: '#fff', padding: '25px', borderRadius: '15px' };
-const dashCard = { padding: '20px', borderRadius: '12px', color: '#fff', textAlign: 'center' };
+// Styles
+const sidebarBtn = (active) => ({ width: '100%', padding: '12px', textAlign: 'left', background: active ? '#1e293b' : 'none', border: 'none', color: active ? '#38bdf8' : '#94a3b8', cursor: 'pointer', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px' });
+const searchInput = { width: '100%', padding: '10px 10px 10px 40px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '16px' };
+const productCard = { background: '#fff', padding: '15px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', cursor: 'pointer' };
+const cartContainer = { width: '350px', background: '#fff', padding: '20px', borderRadius: '15px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' };
+const cartItem = { display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #f1f5f9' };
+const checkoutBtn = { width: '100%', padding: '15px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' };
+const tableCard = { background: '#fff', padding: '20px', borderRadius: '15px' };
+const statCard = { padding: '30px', borderRadius: '20px', color: '#fff' };
