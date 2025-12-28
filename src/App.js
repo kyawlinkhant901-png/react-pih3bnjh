@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient';
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { 
   ShoppingCart, Package, BarChart3, Search, Trash2, Edit3, 
-  Plus, Minus, Camera, Wallet, X, CheckCircle, LayoutDashboard
+  Plus, Minus, Wallet, X, ArrowUpRight, ArrowDownLeft 
 } from 'lucide-react';
 
 export default function App() {
@@ -14,28 +14,14 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [search, setSearch] = useState('');
-  const [discount, setDiscount] = useState(0);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
 
   useEffect(() => {
     fetchData();
-    // Font setup
-    const link = document.createElement('link');
-    link.href = 'https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap';
-    link.rel = 'stylesheet';
-    document.head.appendChild(link);
-
-    // Barcode Scanner Setup (Phone Camera Ready)
     if (view === 'pos' || view === 'purchase') {
-      const scanner = new Html5QrcodeScanner("reader", { 
-        fps: 10, 
-        qrbox: 250,
-        videoConstraints: { facingMode: "environment" } 
-      });
-      scanner.render((text) => {
-        handleBarcodeSearch(text);
-      }, (err) => {});
+      const scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
+      scanner.render((text) => handleBarcodeSearch(text), (err) => {});
       return () => scanner.clear();
     }
   }, [view]);
@@ -47,183 +33,125 @@ export default function App() {
     setProducts(p || []); setOrders(o || []); setExpenses(ex || []);
   }
 
-  // --- Search & Barcode ---
   const handleBarcodeSearch = (code) => {
     const p = products.find(i => i.product_code === code);
-    if (p) {
-      addToCart(p, view === 'pos');
-      setSearch('');
-    }
+    if (p) { addToCart(p, view === 'pos'); setSearch(''); }
   };
 
-  const handleEnterKey = (e) => {
-    if (e.key === 'Enter') {
-      const match = products.find(p => p.name.toLowerCase().includes(search.toLowerCase()) || p.product_code === search);
-      if (match) {
-        addToCart(match, view === 'pos');
-        setSearch('');
-      }
-    }
-  };
-
-  // --- Cart Logic ---
   const addToCart = (p, isSale) => {
     const target = isSale ? cart : purchaseCart;
     const setter = isSale ? setCart : setPurchaseCart;
-
-    if (!isSale && products.some(item => item.product_code === p.product_code)) {
-      if (!window.confirm("ဒီပစ္စည်းက စာရင်းထဲမှာ ရှိပြီးသားပါ။ အဝယ်စာရင်းထဲ ထပ်ပေါင်းထည့်မှာလား?")) return;
-    }
-
     const exist = target.find(i => i.id === p.id);
     if (exist) setter(target.map(i => i.id === p.id ? { ...i, qty: i.qty + 1 } : i));
     else setter([...target, { ...p, qty: 1 }]);
   };
 
-  // --- Save Function (Finalize) ---
   const handleFinalize = async () => {
     const isSale = view === 'pos';
-    const targetCart = isSale ? cart : purchaseCart;
-    if (targetCart.length === 0) return alert("ပစ္စည်းရွေးပါဦး");
+    const currentCart = isSale ? cart : purchaseCart;
+    if (currentCart.length === 0) return alert("စာရင်းရွေးပါဦး");
 
-    const subtotal = targetCart.reduce((a, b) => a + ((isSale ? b.price : b.cost_price) * b.qty), 0);
-    const total = subtotal * (1 - discount/100);
-    const profit = isSale ? total - targetCart.reduce((a, b) => a + (b.cost_price * b.qty), 0) : 0;
+    const total = currentCart.reduce((a, b) => a + ((isSale ? b.price : b.cost_price) * b.qty), 0);
+    const profit = isSale ? total - currentCart.reduce((a, b) => a + (b.cost_price * b.qty), 0) : 0;
 
     const { error } = await supabase.from(isSale ? 'orders' : 'purchase_orders').insert([{
       total_amount: total,
-      items_json: targetCart,
+      items_json: currentCart,
       profit: profit,
-      device_name: targetCart.map(i => `${i.name} x${i.qty}`).join(', ')
+      device_name: currentCart.map(i => `${i.name} x${i.qty}`).join(', ')
     }]);
 
     if (!error) {
-      for (const item of targetCart) {
+      for (const item of currentCart) {
         const newStock = isSale ? item.stock_quantity - item.qty : item.stock_quantity + item.qty;
         await supabase.from('products').update({ stock_quantity: newStock }).eq('id', item.id);
       }
       isSale ? setCart([]) : setPurchaseCart([]);
-      setDiscount(0); fetchData();
-      alert("အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ။");
+      fetchData(); alert("သိမ်းဆည်းပြီးပါပြီ။");
     }
   };
 
-  // --- Analytics Data ---
-  const thisMonthSales = orders.filter(o => new Date(o.created_at).getMonth() === new Date().getMonth()).reduce((a, b) => a + Number(b.total_amount), 0);
-  const totalExpenses = expenses.reduce((a, b) => a + Number(b.amount), 0);
+  // --- နေ့စဉ်ဝင်ငွေ/ထွက်ငွေ တွက်ချက်ခြင်း ---
+  const today = new Date().toLocaleDateString();
+  const dailyIncome = orders.filter(o => new Date(o.created_at).toLocaleDateString() === today).reduce((a,b)=>a+Number(b.total_amount), 0);
+  const dailyExpense = expenses.filter(e => new Date(e.created_at).toLocaleDateString() === today).reduce((a,b)=>a+Number(b.amount), 0);
 
   return (
     <div style={st.app}>
       <div style={st.sidebar}>
-        <div style={st.brand}>Yadana</div>
-        <button onClick={()=>setView('pos')} style={view==='pos'?st.actTab:st.tab}><ShoppingCart size={20}/> POS</button>
-        <button onClick={()=>setView('purchase')} style={view==='purchase'?st.actTab:st.tab}><Package size={20}/> Purchase</button>
-        <button onClick={()=>setView('inventory')} style={view==='inventory'?st.actTab:st.tab}><Edit3 size={20}/> Inventory</button>
-        <button onClick={()=>setView('expenses')} style={view==='expenses'?st.actTab:st.tab}><Wallet size={20}/> Expenses</button>
-        <button onClick={()=>setView('reports')} style={view==='reports'?st.actTab:st.tab}><BarChart3 size={20}/> Analytics</button>
+        <h2 style={st.brand}>Yadana</h2>
+        <button onClick={()=>setView('pos')} style={view==='pos'?st.actTab:st.tab}><ShoppingCart/> POS</button>
+        <button onClick={()=>setView('purchase')} style={view==='purchase'?st.actTab:st.tab}><Package/> Purchase</button>
+        <button onClick={()=>setView('inventory')} style={view==='inventory'?st.actTab:st.tab}><Edit3/> Inventory</button>
+        <button onClick={()=>setView('reports')} style={view==='reports'?st.actTab:st.tab}><BarChart3/> Cash Flow</button>
       </div>
 
       <div style={st.main}>
         <div style={st.header}>
-          <div style={st.searchBar}>
-            <Search size={18} color="#999"/>
-            <input value={search} onKeyDown={handleEnterKey} onChange={e=>setSearch(e.target.value)} placeholder="Search or Scan... (Enter to select)" style={st.sInp}/>
-          </div>
-          <div style={st.userProfile}>Yadana Admin</div>
+            <div style={st.searchBar}><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={st.sInp}/></div>
+            <div style={{display:'flex', gap:'20px'}}>
+                <div style={st.headStat}><ArrowUpRight color="green"/> {dailyIncome.toLocaleString()} K</div>
+                <div style={st.headStat}><ArrowDownLeft color="red"/> {dailyExpense.toLocaleString()} K</div>
+            </div>
         </div>
 
         <div style={st.content}>
-          {(view === 'pos' || view === 'purchase') && (
-            <div style={st.posLayout}>
-              <div style={st.prodSide}>
-                <div id="reader" style={{width:'100%', maxWidth:'300px', borderRadius:'15px', marginBottom:'20px', overflow:'hidden'}}></div>
-                <div style={st.prodGrid}>
-                  {products.filter(p=>p.name.toLowerCase().includes(search.toLowerCase())).map(p=>(
-                    <div key={p.id} style={st.pCard} onClick={()=>addToCart(p, view==='pos')}>
-                      <div style={st.stockTag}>{p.stock_quantity}</div>
-                      <b>{p.name}</b><br/>{view==='pos'?p.price:p.cost_price} K
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div style={st.cartPanel}>
-                <h3>{view==='pos'?'Sale Cart':'Purchase Cart'}</h3>
-                <div style={st.cartItems}>
-                  {(view==='pos'?cart:purchaseCart).map(item=>(
-                    <div key={item.id} style={st.cartRow}>
-                      <span>{item.name} x{item.qty}</span>
-                      <Trash2 size={16} color="red" style={{cursor:'pointer'}} onClick={()=>(view==='pos'?setCart(cart.filter(i=>i.id!==item.id)):setPurchaseCart(purchaseCart.filter(i=>i.id!==item.id)))}/>
-                    </div>
-                  ))}
-                </div>
-                <div style={st.cartFooter}>
-                  <div style={{display:'flex', justifyContent:'space-between', fontSize:'14px'}}>
-                    <span>Discount %</span>
-                    <input type="number" value={discount} onChange={e=>setDiscount(e.target.value)} style={{width:'50px'}}/>
+          {view === 'pos' || view === 'purchase' ? (
+            <div style={st.posGrid}>
+               <div style={{flex:1}}>
+                  <div id="reader" style={st.scanner}></div>
+                  <div style={st.pGrid}>
+                    {products.filter(p=>p.name.toLowerCase().includes(search.toLowerCase())).map(p=>(
+                      <div key={p.id} style={st.pCard} onClick={()=>addToCart(p, view==='pos')}>
+                        <b>{p.name}</b><br/>{view==='pos'?p.price:p.cost_price} K
+                        <div style={st.stockLabel}>Stock: {p.stock_quantity}</div>
+                      </div>
+                    ))}
                   </div>
-                  <h2 style={{margin:'15px 0'}}>Net: {( (view==='pos'?cart:purchaseCart).reduce((a,b)=>a+((view==='pos'?b.price:b.cost_price)*b.qty),0) * (1-discount/100) ).toLocaleString()} K</h2>
-                  <button onClick={handleFinalize} style={st.payBtn}>Confirm {view==='pos'?'Sale':'Purchase'}</button>
-                </div>
-              </div>
+               </div>
+               <div style={st.cartPanel}>
+                  <h3>{view==='pos'?'အရောင်း':'အဝယ်'} စာရင်း</h3>
+                  <div style={{flex:1, overflowY:'auto'}}>
+                    {(view==='pos'?cart:purchaseCart).map(item=>(
+                      <div key={item.id} style={st.cartRow}>
+                        <span>{item.name} <b>x {item.qty}</b></span>
+                        <span>{((view==='pos'?item.price:item.cost_price)*item.qty).toLocaleString()} K</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={st.totalBox}>
+                    <h2>Total: {(view==='pos'?cart:purchaseCart).reduce((a,b)=>a+((view==='pos'?b.price:b.cost_price)*b.qty),0).toLocaleString()} K</h2>
+                    <button onClick={handleFinalize} style={st.saveBtn}>Confirm</button>
+                  </div>
+               </div>
             </div>
-          )}
-
-          {view === 'inventory' && (
+          ) : view === 'inventory' ? (
             <div style={st.glassPage}>
-              <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px'}}>
-                <h2>Inventory Management</h2>
-                <button onClick={()=>{setEditingProduct(null); setIsModalOpen(true)}} style={st.addBtn}>+ Add Product</button>
-              </div>
-              <table style={st.table}>
-                <thead><tr><th>Name</th><th>Price</th><th>Cost</th><th>Stock</th><th>Action</th></tr></thead>
-                <tbody>
-                  {products.map(p=>(
-                    <tr key={p.id}>
-                      <td>{p.name}</td><td>{p.price} K</td><td>{p.cost_price} K</td><td>{p.stock_quantity}</td>
-                      <td>
-                        <Edit3 size={18} style={{marginRight:'10px', cursor:'pointer', color:'blue'}} onClick={()=>{setEditingProduct(p); setIsModalOpen(true)}}/>
-                        <Trash2 size={18} style={{cursor:'pointer', color:'red'}} onClick={async()=>{if(window.confirm("Delete?")){await supabase.from('products').delete().eq('id',p.id); fetchData();}}}/>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+               <div style={st.flexRow}><h2>Inventory</h2><button onClick={()=>{setEditingProduct(null); setIsModalOpen(true)}} style={st.addBtn}>+ New Product</button></div>
+               <table style={st.table}>
+                  <thead><tr><th>Name</th><th>Sale</th><th>Cost</th><th>Stock</th><th>Action</th></tr></thead>
+                  <tbody>{products.map(p=>(
+                    <tr key={p.id}><td>{p.name}</td><td>{p.price}</td><td>{p.cost_price}</td><td>{p.stock_quantity}</td>
+                    <td><Edit3 size={18} onClick={()=>{setEditingProduct(p); setIsModalOpen(true)}}/> <Trash2 size={18} color="red" onClick={async()=>{if(window.confirm("ဖျက်မှာလား?")){await supabase.from('products').delete().eq('id',p.id); fetchData();}}}/></td></tr>
+                  ))}</tbody>
+               </table>
             </div>
-          )}
-
-          {view === 'expenses' && (
+          ) : (
             <div style={st.glassPage}>
-              <h2>Shop Expenses</h2>
-              <button onClick={async()=>{
-                const title = prompt("Expense Title:");
-                const amount = prompt("Amount:");
-                if(title && amount) { await supabase.from('expenses').insert([{title, amount}]); fetchData(); }
-              }} style={st.addBtn}>+ Add Expense</button>
-              <table style={st.table}>
-                <thead><tr><th>Date</th><th>Description</th><th>Amount</th></tr></thead>
-                <tbody>{expenses.map(ex=><tr key={ex.id}><td>{new Date(ex.created_at).toLocaleDateString()}</td><td>{ex.title}</td><td>{ex.amount} K</td></tr>)}</tbody>
-              </table>
-            </div>
-          )}
-
-          {view === 'reports' && (
-            <div style={st.glassPage}>
-              <div style={st.statRow}>
-                <div style={st.statBox}><h4>Monthly Sales</h4><h2>{thisMonthSales.toLocaleString()} K</h2></div>
-                <div style={st.statBox}><h4>Total Expenses</h4><h2>{totalExpenses.toLocaleString()} K</h2></div>
-              </div>
-              <h3>Transaction History</h3>
-              <table style={st.table}>
-                <thead><tr><th>Date</th><th>Items</th><th>Total</th><th>Action</th></tr></thead>
-                <tbody>
-                  {orders.map(o=>(
-                    <tr key={o.id}>
-                      <td>{new Date(o.created_at).toLocaleDateString()}</td><td>{o.device_name}</td><td>{o.total_amount} K</td>
-                      <td><Trash2 size={18} color="red" onClick={async()=>{if(window.confirm("Delete voucher?")){await supabase.from('orders').delete().eq('id',o.id); fetchData();}}}/></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+               <h2>Daily Cash Flow (နေ့စဉ်စာရင်း)</h2>
+               <div style={st.statRow}>
+                  <div style={st.statBox}><h4>Today Income</h4><h3>{dailyIncome.toLocaleString()} K</h3></div>
+                  <div style={st.statBox}><h4>Today Expense</h4><h3>{dailyExpense.toLocaleString()} K</h3></div>
+                  <div style={st.statBox}><h4>Net Cash</h4><h3>{(dailyIncome-dailyExpense).toLocaleString()} K</h3></div>
+               </div>
+               <h3>Recent Transactions</h3>
+               <table style={st.table}>
+                  <thead><tr><th>Date</th><th>Type</th><th>Description</th><th>Amount</th><th>Action</th></tr></thead>
+                  <tbody>{orders.map(o=>(
+                    <tr key={o.id}><td>{new Date(o.created_at).toLocaleDateString()}</td><td style={{color:'green'}}>Income</td><td>{o.device_name}</td><td>{o.total_amount} K</td>
+                    <td><Trash2 size={16} onClick={async()=>{if(window.confirm("ဘောင်ချာဖျက်မလား?")){await supabase.from('orders').delete().eq('id',o.id); fetchData();}}}/></td></tr>
+                  ))}</tbody>
+               </table>
             </div>
           )}
         </div>
@@ -232,21 +160,25 @@ export default function App() {
       {isModalOpen && (
         <div style={st.overlay}>
           <div style={st.modal}>
-            <h3>{editingProduct ? 'Edit' : 'New'} Product</h3>
+            <h3>{editingProduct ? 'Edit Product' : 'Add New Product'}</h3>
             <form onSubmit={async(e)=>{
-              e.preventDefault();
-              const d = Object.fromEntries(new FormData(e.target));
-              if(editingProduct) await supabase.from('products').update(d).eq('id', editingProduct.id);
-              else await supabase.from('products').insert([d]);
-              setIsModalOpen(false); fetchData();
+                e.preventDefault();
+                const d = Object.fromEntries(new FormData(e.target));
+                // Duplicate Check for NEW products only
+                if(!editingProduct && products.some(p => p.product_code === d.product_code)) {
+                    return alert("ဒီ Barcode က ရှိပြီးသားပါ။ ပစ္စည်းအသစ်ဆိုရင် Barcode အသစ် သုံးပေးပါ။");
+                }
+                if(editingProduct) await supabase.from('products').update(d).eq('id', editingProduct.id);
+                else await supabase.from('products').insert([d]);
+                setIsModalOpen(false); fetchData();
             }}>
-              <input name="name" defaultValue={editingProduct?.name} placeholder="Name" style={st.inp} required/>
-              <input name="price" defaultValue={editingProduct?.price} placeholder="Sales Price" style={st.inp} required/>
-              <input name="cost_price" defaultValue={editingProduct?.cost_price} placeholder="Cost" style={st.inp} required/>
-              <input name="stock_quantity" defaultValue={editingProduct?.stock_quantity} placeholder="Stock" style={st.inp} required/>
-              <input name="product_code" defaultValue={editingProduct?.product_code} placeholder="Barcode" style={st.inp}/>
-              <button type="submit" style={st.saveBtn}>Save</button>
-              <button onClick={()=>setIsModalOpen(false)} style={st.cancelBtn}>Cancel</button>
+                <input name="name" defaultValue={editingProduct?.name} placeholder="Name" style={st.inp} required/>
+                <input name="price" defaultValue={editingProduct?.price} placeholder="Sale Price" style={st.inp} required/>
+                <input name="cost_price" defaultValue={editingProduct?.cost_price} placeholder="Cost Price" style={st.inp} required/>
+                <input name="stock_quantity" defaultValue={editingProduct?.stock_quantity} placeholder="Initial Stock" style={st.inp} required/>
+                <input name="product_code" defaultValue={editingProduct?.product_code} placeholder="Barcode" style={st.inp} required/>
+                <button type="submit" style={st.saveBtn}>Save</button>
+                <button type="button" onClick={()=>setIsModalOpen(false)} style={st.cancelBtn}>Cancel</button>
             </form>
           </div>
         </div>
@@ -256,34 +188,34 @@ export default function App() {
 }
 
 const st = {
-  app: { display:'flex', height:'100vh', background:'#f0f4f8', fontFamily:'Poppins, sans-serif' },
-  sidebar: { width:'240px', background:'#2d3436', color:'white', padding:'30px 20px', display:'flex', flexDirection:'column', gap:'10px' },
-  brand: { fontSize:'28px', fontWeight:'bold', marginBottom:'40px', color:'#00d2d3', textAlign:'center' },
-  tab: { display:'flex', alignItems:'center', gap:'15px', padding:'15px', background:'none', border:'none', color:'#b2bec3', cursor:'pointer', borderRadius:'12px', fontSize:'16px' },
-  actTab: { display:'flex', alignItems:'center', gap:'15px', padding:'15px', background:'#00d2d3', border:'none', color:'white', cursor:'pointer', borderRadius:'12px', fontWeight:'600' },
-  main: { flex:1, display:'flex', flexDirection:'column', overflow:'hidden' },
-  header: { display:'flex', justifyContent:'space-between', padding:'20px 30px', background:'white' },
-  searchBar: { display:'flex', alignItems:'center', background:'#f0f4f8', padding:'10px 20px', borderRadius:'15px', width:'400px' },
-  sInp: { border:'none', background:'none', outline:'none', marginLeft:'15px', width:'100%' },
-  content: { flex:1, padding:'30px', overflowY:'auto' },
-  posLayout: { display:'flex', gap:'25px', height:'100%' },
-  prodSide: { flex:1 },
-  prodGrid: { display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))', gap:'15px' },
-  pCard: { background:'white', padding:'20px', borderRadius:'20px', textAlign:'center', cursor:'pointer', position:'relative', boxShadow:'0 4px 6px rgba(0,0,0,0.02)' },
-  stockTag: { position:'absolute', top:'10px', right:'10px', background:'#eee', fontSize:'10px', padding:'2px 5px', borderRadius:'5px' },
-  cartPanel: { width:'380px', background:'white', borderRadius:'25px', padding:'25px', display:'flex', flexDirection:'column' },
-  cartItems: { flex:1, overflowY:'auto' },
-  cartRow: { display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #eee' },
-  cartFooter: { marginTop:'20px', borderTop:'2px solid #eee', paddingTop:'20px' },
-  payBtn: { width:'100%', padding:'15px', background:'#2d3436', color:'white', border:'none', borderRadius:'15px', fontWeight:'bold', cursor:'pointer' },
-  glassPage: { background:'white', padding:'30px', borderRadius:'25px' },
-  table: { width:'100%', borderCollapse:'collapse', marginTop:'15px' },
+  app: { display:'flex', height:'100vh', background:'#f8f9fa', fontFamily:'sans-serif' },
+  sidebar: { width:'220px', background:'#212529', color:'white', padding:'20px' },
+  brand: { fontSize:'24px', color:'#00d2d3', marginBottom:'30px' },
+  tab: { display:'flex', gap:'10px', width:'100%', padding:'12px', background:'none', border:'none', color:'#adb5bd', cursor:'pointer', textAlign:'left' },
+  actTab: { display:'flex', gap:'10px', width:'100%', padding:'12px', background:'#00d2d3', border:'none', color:'white', borderRadius:'8px', cursor:'pointer' },
+  main: { flex:1, display:'flex', flexDirection:'column' },
+  header: { background:'white', padding:'15px 30px', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'1px solid #dee2e6' },
+  searchBar: { display:'flex', alignItems:'center', background:'#f1f3f5', padding:'8px 15px', borderRadius:'20px', width:'300px' },
+  sInp: { border:'none', background:'none', outline:'none', marginLeft:'10px', width:'100%' },
+  headStat: { background:'#f8f9fa', padding:'8px 15px', borderRadius:'10px', display:'flex', alignItems:'center', gap:'5px', fontWeight:'bold' },
+  content: { flex:1, padding:'25px', overflowY:'auto' },
+  posGrid: { display:'flex', gap:'20px', height:'100%' },
+  pGrid: { display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))', gap:'15px' },
+  pCard: { background:'white', padding:'15px', borderRadius:'12px', textAlign:'center', cursor:'pointer', border:'1px solid #eee' },
+  stockLabel: { fontSize:'11px', color:'#666', marginTop:'5px' },
+  cartPanel: { width:'350px', background:'white', padding:'20px', borderRadius:'15px', display:'flex', flexDirection:'column', boxShadow:'0 4px 12px rgba(0,0,0,0.05)' },
+  cartRow: { display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #f8f9fa' },
+  totalBox: { marginTop:'auto', paddingTop:'20px', borderTop:'2px solid #eee' },
+  saveBtn: { width:'100%', padding:'12px', background:'#212529', color:'white', border:'none', borderRadius:'8px', cursor:'pointer', fontWeight:'bold', marginTop:'10px' },
+  glassPage: { background:'white', padding:'25px', borderRadius:'15px' },
+  flexRow: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px' },
+  addBtn: { padding:'10px 20px', background:'#00d2d3', color:'white', border:'none', borderRadius:'8px', cursor:'pointer' },
+  table: { width:'100%', borderCollapse:'collapse' },
   statRow: { display:'flex', gap:'20px', marginBottom:'30px' },
-  statBox: { flex:1, background:'#f9f9f9', padding:'25px', borderRadius:'20px', textAlign:'center' },
-  addBtn: { padding:'10px 20px', background:'#00d2d3', color:'white', border:'none', borderRadius:'10px', cursor:'pointer' },
-  overlay: { position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', justifyContent:'center', alignItems:'center', zIndex:1000 },
-  modal: { background:'white', padding:'40px', borderRadius:'25px', width:'400px' },
-  inp: { width:'100%', padding:'12px', marginBottom:'10px', borderRadius:'10px', border:'1px solid #ddd' },
-  saveBtn: { width:'100%', padding:'12px', background:'#00d2d3', color:'white', border:'none', borderRadius:'10px', marginBottom:'5px' },
-  cancelBtn: { width:'100%', padding:'12px', background:'#eee', border:'none', borderRadius:'10px' }
+  statBox: { flex:1, background:'#f8f9fa', padding:'20px', borderRadius:'12px', textAlign:'center' },
+  overlay: { position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', justifyContent:'center', alignItems:'center' },
+  modal: { background:'white', padding:'30px', borderRadius:'15px', width:'350px' },
+  inp: { width:'100%', padding:'10px', marginBottom:'10px', borderRadius:'6px', border:'1px solid #ddd', boxSizing:'border-box' },
+  cancelBtn: { width:'100%', padding:'10px', background:'#eee', border:'none', borderRadius:'8px', marginTop:'5px', cursor:'pointer' },
+  scanner: { width:'100%', maxWidth:'300px', borderRadius:'10px', overflow:'hidden', marginBottom:'20px' }
 };
