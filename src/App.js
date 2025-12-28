@@ -1,18 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
-import { Store, Package, LayoutDashboard, Search, Trash2, Edit3, Plus, Wifi, WifiOff, CloudUpload, AlertTriangle, Save, X } from 'lucide-react';
+import { ShoppingCart, Package, BarChart3, Search, Trash2, Edit3, Plus, Minus, Wifi, WifiOff, CloudUpload, AlertTriangle, X, CheckCircle2 } from 'lucide-react';
 
 export default function App() {
-  const [view, setView] = useState('pos'); // pos, inventory, history
+  const [view, setView] = useState('pos');
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
   const [search, setSearch] = useState('');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [offlineOrders, setOfflineOrders] = useState(JSON.parse(localStorage.getItem('offline_orders')) || []);
   
-  // Forms
-  const [showAddProduct, setShowAddProduct] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [productForm, setProductForm] = useState({ name: '', price: 0, cost_price: 0, stock_quantity: 0, product_code: '' });
 
@@ -23,172 +21,223 @@ export default function App() {
   }, [isOnline]);
 
   async function fetchData() {
-    if (isOnline) {
-      const { data: p } = await supabase.from('products').select('*').order('name');
-      const { data: o } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
-      setProducts(p || []);
-      setOrders(o || []);
-      localStorage.setItem('products_cache', JSON.stringify(p || []));
-    } else {
-      setProducts(JSON.parse(localStorage.getItem('products_cache')) || []);
-    }
+    const { data: p } = await supabase.from('products').select('*').order('name');
+    const { data: o } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+    setProducts(p || []);
+    setOrders(o || []);
+    if (isOnline) localStorage.setItem('products_cache', JSON.stringify(p || []));
   }
 
-  // --- POS Logic ---
+  // Cart Functions
   const addToCart = (p) => {
     const existing = cart.find(i => i.id === p.id);
-    setCart(existing ? cart.map(i => i.id === p.id ? { ...i, qty: i.qty + 1 } : i) : [...cart, { ...p, qty: 1 }]);
+    if (existing) {
+      setCart(cart.map(i => i.id === p.id ? { ...i, qty: i.qty + 1 } : i));
+    } else {
+      setCart([...cart, { ...p, qty: 1 }]);
+    }
+  };
+
+  const removeFromCart = (id) => {
+    const existing = cart.find(i => i.id === id);
+    if (existing.qty > 1) {
+      setCart(cart.map(i => i.id === id ? { ...i, qty: i.qty - 1 } : i));
+    } else {
+      setCart(cart.filter(i => i.id !== id));
+    }
   };
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     const total = cart.reduce((a, b) => a + (b.price * b.qty), 0);
-    const costTotal = cart.reduce((a, b) => a + ((b.cost_price || 0) * b.qty), 0);
-    const summary = cart.map(i => `${i.name} x${i.qty} (${i.price * i.qty}K)`).join(', ');
-    
-    const orderData = { total_amount: total, device_name: summary, profit: total - costTotal, created_at: new Date() };
+    const profit = total - cart.reduce((a, b) => a + ((b.cost_price || 0) * b.qty), 0);
+    const summary = cart.map(i => `${i.name} x${i.qty}`).join(', ');
 
-    if (isOnline) {
-      const { error } = await supabase.from('orders').insert([orderData]);
-      if (!error) {
-        for (const item of cart) await supabase.rpc('handle_checkout', { p_id: item.id, quantity_to_subtract: item.qty });
-        alert("အရောင်းအောင်မြင်သည်။");
+    const { error } = await supabase.from('orders').insert([{ total_amount: total, device_name: summary, profit }]);
+    if (!error) {
+      for (const item of cart) {
+        await supabase.rpc('handle_checkout', { p_id: item.id, quantity_to_subtract: item.qty });
       }
-    } else {
-      const updatedOffline = [...offlineOrders, orderData];
-      setOfflineOrders(updatedOffline);
-      localStorage.setItem('offline_orders', JSON.stringify(updatedOffline));
-      alert("Offline သိမ်းလိုက်ပါပြီ။");
+      setCart([]); fetchData();
+      alert("ဘောင်ချာ သိမ်းဆည်းပြီးပါပြီ။");
     }
-    setCart([]); fetchData();
   };
-
-  // --- Inventory Logic ---
-  const saveProduct = async () => {
-    const action = editingProduct ? supabase.from('products').update(productForm).eq('id', editingProduct.id) : supabase.from('products').insert([productForm]);
-    const { error } = await action;
-    if (!error) { setShowAddProduct(false); setEditingProduct(null); fetchData(); }
-  };
-
-  const updateStock = async (p_id, qty) => {
-    const { error } = await supabase.rpc('handle_purchase', { p_id: p_id, quantity_to_add: parseInt(qty) });
-    if (!error) { alert("စတော့တိုးပြီးပါပြီ"); fetchData(); }
-  };
-
-  // --- Render Functions ---
-  const filteredProducts = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || (p.product_code && p.product_code.includes(search)));
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: '#f1f5f9' }}>
-      {/* Sidebar */}
-      <div style={{ width: '250px', background: '#0f172a', color: '#fff', padding: '20px' }}>
-        <h2>My POS Pro</h2>
-        <div style={{ fontSize: '12px', color: isOnline ? '#4ade80' : '#f87171', marginBottom: '20px' }}>
-          {isOnline ? <Wifi size={14}/> : <WifiOff size={14}/>} {isOnline ? 'Online' : 'Offline'}
+    <div style={container}>
+      {/* Header */}
+      <div style={header}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <h2 style={{ margin: 0, color: '#714B67' }}>Odoo POS</h2>
+          <nav style={navGroup}>
+            <button onClick={() => setView('pos')} style={view === 'pos' ? activeNav : navItem}>အရောင်း</button>
+            <button onClick={() => setView('inventory')} style={view === 'inventory' ? activeNav : navItem}>ပစ္စည်းစီမံခြင်း</button>
+            <button onClick={() => setView('history')} style={view === 'history' ? activeNav : navItem}>Dashboard</button>
+          </nav>
         </div>
-        <button onClick={() => setView('pos')} style={navBtn(view==='pos')}><Store size={18}/> အရောင်း (POS)</button>
-        <button onClick={() => setView('inventory')} style={navBtn(view==='inventory')}><Package size={18}/> ပစ္စည်း/စတော့</button>
-        <button onClick={() => setView('history')} style={navBtn(view==='history')}><LayoutDashboard size={18}/> လချုပ်/မှတ်တမ်း</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          {isOnline ? <Wifi color="#10b981" size={20}/> : <WifiOff color="#ef4444" size={20}/>}
+          <div style={userBadge}>Admin</div>
+        </div>
       </div>
 
-      {/* Main Content */}
-      <div style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
+      <div style={mainBody}>
         {view === 'pos' && (
-          <div style={{ display: 'flex', gap: '20px' }}>
-            <div style={{ flex: 1 }}>
-              <input placeholder="Code သို့မဟုတ် အမည်ဖြင့်ရှာပါ..." style={inputStyle} onChange={e => setSearch(e.target.value)} />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '15px' }}>
-                {filteredProducts.map(p => (
-                  <div key={p.id} onClick={() => addToCart(p)} style={cardStyle}>
-                    {p.stock_quantity <= 5 && <AlertTriangle size={16} color="red" style={{float:'right'}}/>}
-                    <b>{p.name}</b><br/>
-                    <small>#{p.product_code || 'No Code'}</small>
-                    <div style={{color:'#2563eb', fontWeight:'bold'}}>{p.price} K</div>
-                    <div style={{fontSize:'12px', color: p.stock_quantity <= 5 ? 'red' : '#666'}}>Stock: {p.stock_quantity}</div>
+          <div style={posLayout}>
+            {/* Left: Cart */}
+            <div style={cartContainer}>
+              <div style={cartHeader}>လက်ရှိဘောင်ချာ</div>
+              <div style={cartList}>
+                {cart.length === 0 ? <div style={emptyCart}>ပစ္စည်းရွေးပါ</div> : cart.map(item => (
+                  <div key={item.id} style={cartRow}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 'bold' }}>{item.name}</div>
+                      <small>{item.qty} x {item.price.toLocaleString()} K</small>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: 'bold' }}>{(item.price * item.qty).toLocaleString()} K</div>
+                      <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
+                        <button onClick={() => removeFromCart(item.id)} style={btnCircle}><Minus size={12}/></button>
+                        <button onClick={() => addToCart(item)} style={btnCircle}><Plus size={12}/></button>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
+              <div style={cartFooter}>
+                <div style={totalLine}>
+                  <span>Total</span>
+                  <span>{cart.reduce((a, b) => a + (b.price * b.qty), 0).toLocaleString()} K</span>
+                </div>
+                <button onClick={handleCheckout} style={checkoutBtn}>Payment</button>
+              </div>
             </div>
-            <div style={cartPanel}>
-              <h3>လက်ရှိဘောင်ချာ</h3>
-              <div style={{flex:1}}>{cart.map((c,i)=><div key={i} style={cartItem}>{c.name} x{c.qty} <span style={{float:'right'}}>{c.price * c.qty} K</span></div>)}</div>
-              <div style={{borderTop:'2px solid #eee', paddingTop:'10px'}}>
-                <h3>Total: {cart.reduce((a,b)=>a+(b.price*b.qty),0).toLocaleString()} K</h3>
-                <button onClick={handleCheckout} style={btnPrimary}>Pay Now</button>
+
+            {/* Right: Products */}
+            <div style={productArea}>
+              <div style={searchBar}>
+                <Search size={20} color="#94a3b8" />
+                <input 
+                  placeholder="ပစ္စည်းရှာရန်..." 
+                  style={searchInput} 
+                  onChange={e => setSearch(e.target.value)}
+                />
+              </div>
+              <div style={productGrid}>
+                {products.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).map(p => (
+                  <div key={p.id} onClick={() => addToCart(p)} style={productCard}>
+                    <div style={productImg}><Package size={30} color="#e2e8f0"/></div>
+                    <div style={productInfo}>
+                      <div style={pName}>{p.name}</div>
+                      <div style={pPrice}>{p.price.toLocaleString()} K</div>
+                      <div style={pStock}>Stock: {p.stock_quantity}</div>
+                    </div>
+                    {p.stock_quantity <= 5 && <div style={lowStockTag}>!</div>}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         )}
 
         {view === 'inventory' && (
-          <div style={contentCard}>
-            <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px'}}>
-              <h3>📦 ပစ္စည်းစီမံခန့်ခွဲမှု</h3>
-              <button onClick={() => {setEditingProduct(null); setProductForm({name:'', price:0, cost_price:0, stock_quantity:0, product_code:''}); setShowAddProduct(true)}} style={btnSuccess}>+ ပစ္စည်းအသစ်</button>
-            </div>
-            <table style={{width:'100%', borderCollapse:'collapse'}}>
-              <thead style={{background:'#f8fafc'}}><tr><th>Code</th><th>အမည်</th><th>ရောင်းစျေး</th><th>ရင်းစျေး</th><th>စတော့</th><th>Action</th></tr></thead>
-              <tbody>
-                {products.map(p => (
-                  <tr key={p.id} style={{borderBottom:'1px solid #eee'}}>
-                    <td style={{padding:'10px'}}>{p.product_code || '-'}</td>
-                    <td>{p.name}</td><td>{p.price} K</td><td>{p.cost_price} K</td>
-                    <td style={{color: p.stock_quantity <= 5 ? 'red' : 'black'}}>{p.stock_quantity}</td>
-                    <td>
-                      <Edit3 size={16} onClick={()=>{setEditingProduct(p); setProductForm(p); setShowAddProduct(true)}} style={{cursor:'pointer', marginRight:'10px'}}/>
-                      <Plus size={16} onClick={()=>{const q = prompt("ဝယ်ယူသည့်အရေအတွက်?"); if(q) updateStock(p.id, q)}} style={{cursor:'pointer', color:'green', marginRight:'10px'}}/>
-                      <Trash2 size={16} onClick={async()=>{if(window.confirm("ဖျက်မှာလား?")){await supabase.from('products').delete().eq('id',p.id); fetchData()}}} style={{cursor:'pointer', color:'red'}}/>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {view === 'history' && (
-          <div style={contentCard}>
-            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'15px', marginBottom:'20px'}}>
-              <div style={{background:'#2563eb', color:'#fff', padding:'20px', borderRadius:'10px'}}><h4>ဒီလရောင်းရငွေ</h4><h2>{orders.reduce((a,b)=>a+Number(b.total_amount),0).toLocaleString()} K</h2></div>
-              <div style={{background:'#10b981', color:'#fff', padding:'20px', borderRadius:'10px'}}><h4>ဒီလအမြတ်</h4><h2>{orders.reduce((a,b)=>a+Number(b.profit || 0),0).toLocaleString()} K</h2></div>
-              <div style={{background:'#f59e0b', color:'#fff', padding:'20px', borderRadius:'10px'}}><h4>ဘောင်ချာစုစုပေါင်း</h4><h2>{orders.length} စောင်</h2></div>
-            </div>
-            {orders.map(o => (
-              <div key={o.id} style={{display:'flex', justifyContent:'space-between', padding:'15px', borderBottom:'1px solid #eee'}}>
-                <div><b>{new Date(o.created_at).toLocaleString()}</b><br/><small>{o.device_name}</small></div>
-                <div><b style={{color:'#2563eb'}}>{o.total_amount} K</b> <Trash2 size={16} color="red" onClick={async()=>{if(window.confirm("ဖျက်မှာလား?")){await supabase.from('orders').delete().eq('id',o.id); fetchData()}}} style={{cursor:'pointer', marginLeft:'15px'}}/></div>
+           <div style={contentPage}>
+              <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px'}}>
+                <h3>ပစ္စည်းနှင့် စတော့ စာရင်း</h3>
+                <button onClick={() => {setEditingProduct(null); setProductForm({name:'', price:0, cost_price:0, stock_quantity:0, product_code:''}); setShowModal(true)}} style={actionBtn}>+ ပစ္စည်းအသစ်ထည့်ရန်</button>
               </div>
-            ))}
-          </div>
-        )}
-
-        {showAddProduct && (
-          <div style={modalOverlay}>
-            <div style={modalContent}>
-              <h3>{editingProduct ? 'ပစ္စည်းပြင်ဆင်ရန်' : 'ပစ္စည်းအသစ်ထည့်ရန်'}</h3>
-              <input placeholder="ပစ္စည်းအမည်" style={inputStyle} value={productForm.name} onChange={e=>setProductForm({...productForm, name:e.target.value})}/>
-              <input placeholder="Product Code" style={inputStyle} value={productForm.product_code} onChange={e=>setProductForm({...productForm, product_code:e.target.value})}/>
-              <input placeholder="ရောင်းစျေး" type="number" style={inputStyle} value={productForm.price} onChange={e=>setProductForm({...productForm, price:Number(e.target.value)})}/>
-              <input placeholder="ရင်းစျေး" type="number" style={inputStyle} value={productForm.cost_price} onChange={e=>setProductForm({...productForm, cost_price:Number(e.target.value)})}/>
-              <input placeholder="စတော့အရေအတွက်" type="number" style={inputStyle} value={productForm.stock_quantity} onChange={e=>setProductForm({...productForm, stock_quantity:Number(e.target.value)})}/>
-              <button onClick={saveProduct} style={btnPrimary}>သိမ်းဆည်းမည်</button>
-              <button onClick={()=>setShowAddProduct(false)} style={{...btnPrimary, background:'#64748b', marginTop:'10px'}}>ပိတ်မည်</button>
-            </div>
-          </div>
+              <table style={odooTable}>
+                <thead>
+                  <tr><th>Code</th><th>အမည်</th><th>ရောင်းစျေး</th><th>ရင်းစျေး</th><th>စတော့</th><th>လုပ်ဆောင်ချက်</th></tr>
+                </thead>
+                <tbody>
+                  {products.map(p => (
+                    <tr key={p.id}>
+                      <td>{p.product_code || '-'}</td>
+                      <td>{p.name}</td>
+                      <td>{p.price} K</td>
+                      <td>{p.cost_price} K</td>
+                      <td style={{color: p.stock_quantity <= 5 ? 'red' : 'inherit'}}>{p.stock_quantity}</td>
+                      <td>
+                        <button onClick={()=>{setEditingProduct(p); setProductForm(p); setShowModal(true)}} style={iconBtn}><Edit3 size={16}/></button>
+                        <button onClick={async()=>{if(window.confirm("ဖျက်မှာလား?")){await supabase.from('products').delete().eq('id',p.id); fetchData()}}} style={iconBtn}><Trash2 size={16} color="red"/></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+           </div>
         )}
       </div>
+
+      {/* Product Modal */}
+      {showModal && (
+        <div style={modalOverlay}>
+          <div style={modalContent}>
+            <h3>{editingProduct ? 'ပြင်ဆင်ရန်' : 'အသစ်ထည့်ရန်'}</h3>
+            <label>ပစ္စည်းအမည်</label>
+            <input style={formInput} value={productForm.name} onChange={e=>setProductForm({...productForm, name:e.target.value})}/>
+            <div style={{display:'flex', gap:'10px'}}>
+              <div style={{flex:1}}><label>ရောင်းစျေး</label><input type="number" style={formInput} value={productForm.price} onChange={e=>setProductForm({...productForm, price:Number(e.target.value)})}/></div>
+              <div style={{flex:1}}><label>ရင်းစျေး</label><input type="number" style={formInput} value={productForm.cost_price} onChange={e=>setProductForm({...productForm, cost_price:Number(e.target.value)})}/></div>
+            </div>
+            <label>စတော့အရေအတွက်</label>
+            <input type="number" style={formInput} value={productForm.stock_quantity} onChange={e=>setProductForm({...productForm, stock_quantity:Number(e.target.value)})}/>
+            <div style={{display:'flex', gap:'10px', marginTop:'20px'}}>
+              <button onClick={async()=>{
+                const action = editingProduct ? supabase.from('products').update(productForm).eq('id', editingProduct.id) : supabase.from('products').insert([productForm]);
+                await action; setShowModal(false); fetchData();
+              }} style={saveBtn}>သိမ်းမည်</button>
+              <button onClick={()=>setShowModal(false)} style={cancelBtn}>ပိတ်မည်</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// Styles
-const navBtn = (sel) => ({ width: '100%', padding: '12px', textAlign: 'left', background: sel ? '#38bdf8' : 'none', border: 'none', color: sel ? '#0f172a' : '#94a3b8', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '5px' });
-const cardStyle = { background: '#fff', padding: '15px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', cursor: 'pointer' };
-const inputStyle = { width: '100%', padding: '12px', marginBottom: '15px', borderRadius: '8px', border: '1px solid #e2e8f0' };
-const cartPanel = { width: '350px', background: '#fff', padding: '20px', borderRadius: '15px', display: 'flex', flexDirection: 'column' };
-const cartItem = { padding: '10px 0', borderBottom: '1px solid #f1f5f9', fontSize: '14px' };
-const btnPrimary = { width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' };
-const btnSuccess = { padding: '10px 20px', background: '#10b981', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' };
-const contentCard = { background: '#fff', padding: '20px', borderRadius: '15px' };
-const modalOverlay = { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center' };
-const modalContent = { background: '#fff', padding: '30px', borderRadius: '15px', width: '400px' };
+// --- Odoo Theme Styles ---
+const container = { display: 'flex', flexDirection: 'column', height: '100vh', background: '#f0f2f5', fontFamily: 'Segoe UI, sans-serif' };
+const header = { height: '60px', background: '#875A7B', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' };
+const navGroup = { display: 'flex', marginLeft: '40px', gap: '5px' };
+const navItem = { background: 'none', border: 'none', color: '#eee', padding: '10px 15px', cursor: 'pointer', fontSize: '15px' };
+const activeNav = { ...navItem, background: '#714B67', borderRadius: '4px', color: 'white', fontWeight: 'bold' };
+const mainBody = { flex: 1, display: 'flex', overflow: 'hidden' };
+const posLayout = { display: 'flex', flex: 1, width: '100%' };
+
+// Cart Styles
+const cartContainer = { width: '400px', background: 'white', display: 'flex', flexDirection: 'column', borderRight: '1px solid #ddd' };
+const cartHeader = { padding: '15px', background: '#e9ecef', fontWeight: 'bold', borderBottom: '1px solid #ddd' };
+const cartList = { flex: 1, overflowY: 'auto', padding: '10px' };
+const cartRow = { display: 'flex', justifyContent: 'space-between', padding: '12px', borderBottom: '1px solid #f1f3f5', alignItems: 'center' };
+const cartFooter = { padding: '20px', background: '#f8f9fa', borderTop: '2px solid #ddd' };
+const totalLine = { display: 'flex', justifyContent: 'space-between', fontSize: '24px', fontWeight: 'bold', marginBottom: '15px', color: '#875A7B' };
+const checkoutBtn = { width: '100%', padding: '15px', background: '#00A09D', color: 'white', border: 'none', borderRadius: '8px', fontSize: '18px', fontWeight: 'bold', cursor: 'pointer' };
+
+// Product Area
+const productArea = { flex: 1, padding: '20px', overflowY: 'auto' };
+const searchBar = { display: 'flex', alignItems: 'center', background: 'white', padding: '10px 20px', borderRadius: '25px', marginBottom: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' };
+const searchInput = { flex: 1, border: 'none', marginLeft: '10px', fontSize: '16px', outline: 'none' };
+const productGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '15px' };
+const productCard = { background: 'white', borderRadius: '10px', overflow: 'hidden', cursor: 'pointer', transition: 'transform 0.1s', position: 'relative', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' };
+const productImg = { height: '100px', background: '#f8f9fa', display: 'flex', justifyContent: 'center', alignItems: 'center' };
+const productInfo = { padding: '10px', textAlign: 'center' };
+const pName = { fontSize: '14px', fontWeight: '600', height: '40px', overflow: 'hidden' };
+const pPrice = { color: '#00A09D', fontWeight: 'bold', marginTop: '5px' };
+const pStock = { fontSize: '11px', color: '#666' };
+
+// Inventory & Common
+const contentPage = { flex: 1, padding: '30px', background: 'white', margin: '20px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' };
+const odooTable = { width: '100%', borderCollapse: 'collapse', marginTop: '10px' };
+const actionBtn = { padding: '10px 20px', background: '#875A7B', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' };
+const btnCircle = { width: '24px', height: '24px', borderRadius: '50%', border: '1px solid #ddd', background: 'white', cursor: 'pointer' };
+const modalOverlay = { position: 'fixed', top:0, left:0, right:0, bottom:0, background: 'rgba(0,0,0,0.5)', display:'flex', justifyContent:'center', alignItems:'center' };
+const modalContent = { background:'white', padding:'30px', borderRadius:'15px', width:'450px' };
+const formInput = { width:'100%', padding:'10px', margin:'10px 0', borderRadius:'5px', border:'1px solid #ddd' };
+const saveBtn = { flex:1, padding:'12px', background:'#00A09D', color:'white', border:'none', borderRadius:'5px', cursor:'pointer' };
+const cancelBtn = { flex:1, padding:'12px', background:'#6c757d', color:'white', border:'none', borderRadius:'5px', cursor:'pointer' };
+const lowStockTag = { position:'absolute', top:'5px', right:'5px', background:'red', color:'white', width:'20px', height:'20px', borderRadius:'50%', textAlign:'center', fontSize:'14px' };
+const iconBtn = { background:'none', border:'none', cursor:'pointer', padding:'5px' };
+const userBadge = { background: '#714B67', padding: '5px 15px', borderRadius: '15px', fontSize: '13px' };
+const emptyCart = { textAlign:'center', color:'#999', marginTop:'50px' };
